@@ -219,9 +219,9 @@ static int CheckData(void)
 	//xil_printf("Data received: ");
 	for(Index = 0; Index < MAX_PKT_LEN_WORDS; Index++) {
 		if((Index >= 0) && (Index < 5))
-			xil_printf("%08X ", (unsigned int)RxPacket[Index]);
+			xil_printf("%d ", (unsigned int)RxPacket[Index]);
 		if((Index >= MAX_PKT_LEN_WORDS-5) && (Index < MAX_PKT_LEN_WORDS))
-			xil_printf("%08X ", (unsigned int)RxPacket[Index]);
+			xil_printf("%d ", (unsigned int)RxPacket[Index]);
 	}
 	/*
 	xil_printf("\r\nLast received: ");
