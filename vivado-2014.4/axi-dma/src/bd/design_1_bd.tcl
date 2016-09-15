@@ -151,11 +151,11 @@ proc create_root_design { parentCell } {
 
   # Create instance: axi_dma_0, and set properties
   set axi_dma_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 axi_dma_0 ]
-  set_property -dict [ list CONFIG.c_sg_include_stscntrl_strm {0}  ] $axi_dma_0
+  set_property -dict [list CONFIG.c_sg_include_stscntrl_strm {0}] [list CONFIG.c_include_sg {0}] $axi_dma_0
 
   # Create instance: axi_mem_intercon, and set properties
   set axi_mem_intercon [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 axi_mem_intercon ]
-  set_property -dict [ list CONFIG.NUM_MI {1} CONFIG.NUM_SI {3}  ] $axi_mem_intercon
+  set_property -dict [ list CONFIG.NUM_MI {1} CONFIG.NUM_SI {2}  ] $axi_mem_intercon
 
   # Create instance: axis_data_fifo_0, and set properties
   set axis_data_fifo_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:1.1 axis_data_fifo_0 ]
