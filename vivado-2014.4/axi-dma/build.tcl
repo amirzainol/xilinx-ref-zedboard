@@ -86,7 +86,7 @@ current_run -implementation [get_runs impl_1]
 puts "INFO: Project created:zedboard"
 
 # Create block design
-source $origin_dir/src/bd/design_1.tcl
+source $origin_dir/src/bd/design_1_bd.tcl
 
 # Generate the wrapper
 set design_name [get_bd_designs]
