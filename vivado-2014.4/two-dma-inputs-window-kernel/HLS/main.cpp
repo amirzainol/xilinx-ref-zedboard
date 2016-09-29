@@ -1,18 +1,25 @@
 #include "matrixmul.h"
 
-float kernel[MAT_DIM*MAT_DIM] = {
-		1, 0, 1,
-		0, 0, 0,
-		1, 0, 1,
+const float amb_temp_cpu = 80.0;
+const float Rx_1 = 0.1;
+const float Ry_1 = 0.1;
+const float Rz_1 = 0.000049;
+const float Cap_1 = 0.001365;
+
+float kernel[(MAT_DIM+2)*(MAT_DIM+2)] = {
+		0, 1, 0,
+		1, 1, 1,
+		0, 1, 0,
 };
 
-#define HORIZONTAL_PIXEL_WIDTH 3
+#define HORIZONTAL_PIXEL_WIDTH MAT_DIM
 // 3x3 kernel
 #define KERNEL_DIM 3
 
 using namespace hls;
 
-float sumWindow(hls::Window<KERNEL_DIM,KERNEL_DIM,float> *window);
+float func1Window(	hls::Window<KERNEL_DIM,KERNEL_DIM,float> *temp,
+					hls::Window<KERNEL_DIM,KERNEL_DIM,float> *power);
 
 void matrixmul(
 		stream<AXI_VALUE> &in_stream_0,
@@ -21,140 +28,147 @@ void matrixmul(
 ) {
 
 #pragma HLS INLINE off
+#pragma HLS pipeline II=1 enable_flush
 
-	AXI_VALUE aValue, bValue;
+	AXI_VALUE aValue_in, aValue_out, bValue_in, bValue_out;
 	int i,j;
 
-	float y_buf[2][HORIZONTAL_PIXEL_WIDTH];
+	float y_buf[2][HORIZONTAL_PIXEL_WIDTH+2];
 #pragma HLS array_partition variable=y_buf block factor=2 dim=1
 #pragma HLS resource variable=y_buf core=RAM_2P
 
 	// Defining the line buffer and setting the inter dependency to false through pragmas
-	hls::LineBuffer<KERNEL_DIM,MAT_DIM,float> lineBuff;
-	hls::Window<KERNEL_DIM,KERNEL_DIM,float> windowX;
+	hls::LineBuffer<KERNEL_DIM,MAT_DIM+2,float> lineBuff;
+	hls::LineBuffer<KERNEL_DIM,MAT_DIM+2,float> lineBuff_power;
+	hls::Window<KERNEL_DIM,KERNEL_DIM,float> windowTemp;
+	hls::Window<KERNEL_DIM,KERNEL_DIM,float> windowPower;
 	// Index used to keep track of row,col
 	int idxCol = 0;
 	int idxRow = 0;
 	int pixConvolved = 0;
+	int pixConvolved_Power = 0;
 	// Calculate delay to fix line-buffer offset
-	int waitTicks = (MAT_DIM*(KERNEL_DIM-1)+KERNEL_DIM)/2;// 241;
+	int waitTicks = ((MAT_DIM+2)*(KERNEL_DIM-1)+KERNEL_DIM)/2;
 	int countWait = 0;
 	int sentPixels = 0;
 	int operation = 0;
 
-	  Row: for(i = 0; i < MAT_DIM; i++) {
-	    Col: for(j = 0; j < MAT_DIM; j++) {
+	Row: for(i = 0; i < MAT_DIM+2; i++) {
+		Col: for(j = 0; j < MAT_DIM+2; j++) {
 
-// the HLS PIPELINE improves our latency
-#pragma HLS PIPELINE
+#pragma HLS PIPELINE // the HLS PIPELINE improves our latency
 
-		// Read and cache (Block here if FIFO sender is empty)
-		//aValue = in_stream_0.read();
+			union {	unsigned int ival; float oval; } converterA, converterB;
 
-    	in_stream_0.read(aValue);
-    	in_stream_1.read(bValue);
-		union {	unsigned int ival; mat_a_t oval; } converterA, converterB, convC;
-		converterA.ival = aValue.data;
-		converterB.ival = bValue.data;
-
-		// Put data on the LineBuffer
-		lineBuff.shift_up(idxCol);
-		lineBuff.insert_top(converterA.oval,idxCol); // Will put in val[2] of line buffer (Check Debug)
-
-		// Put data on the window and multiply with the kernel
-		for (int idxWinRow = 0; idxWinRow < KERNEL_DIM; idxWinRow++)
-		{
-			for (int idxWinCol = 0; idxWinCol < KERNEL_DIM; idxWinCol++)
+			if(i==0 || i==(MAT_DIM+1) || j==0 || j==(MAT_DIM+1))
 			{
-				// idxWinCol + pixConvolved, will slide the window ...
-				float val = (float)lineBuff.getval(idxWinRow,idxWinCol+pixConvolved);
-
-				// Multiply kernel by the sampling window
-				val = (float)kernel[(idxWinRow*KERNEL_DIM) + idxWinCol ] * val;
-				windowX.insert(val,idxWinRow,idxWinCol);
-
+				converterA.ival = 0;
+				converterB.ival = 0;
+			}
+			else
+			{
+				in_stream_0.read(aValue_in);
+				converterA.ival = aValue_in.data;
+				in_stream_1.read(bValue_in);
+				converterB.ival = bValue_in.data;
 			}
 
-		}
+			// Put data on the LineBuffer
+			lineBuff.shift_up(idxCol);
+			lineBuff.insert_top(converterA.oval,idxCol); // Will put in val[2] of line buffer (Check Debug)
 
-		// Avoid calculate out of the image boundaries
-		float valOutput = 0;
-		if ((idxRow >= KERNEL_DIM-1) && (idxCol >= KERNEL_DIM-1))
-		{
-				valOutput = sumWindow(&windowX);
-			pixConvolved++;
-		}
+			lineBuff_power.shift_up(idxCol);
+			lineBuff_power.insert_top(converterB.oval,idxCol);
 
-		// Calculate row and col index
-		if (idxCol < MAT_DIM-1)
-		{
-			idxCol++;
-		}
-		else
-		{
-			// New line
-			idxCol = 0;
-			idxRow++;
-			pixConvolved = 0;
-		}
+			// Put data on the window and multiply with the kernel
+			for (int idxWinRow = 0; idxWinRow < KERNEL_DIM; idxWinRow++)
+			{
+				for (int idxWinCol = 0; idxWinCol < KERNEL_DIM; idxWinCol++)
+				{
+					// idxWinCol + pixConvolved, will slide the window
+					float val = (float)lineBuff.getval(idxWinRow,idxWinCol+pixConvolved);
+					// Multiply kernel by the sampling window
+					val = (float)kernel[(idxWinRow*KERNEL_DIM) + idxWinCol ] * val;
+					windowTemp.insert(val,idxWinRow,idxWinCol);
+				}
+			}
 
-		countWait++;
-		if (countWait > waitTicks)
-		{
-			//bValue.data = valOutput;
-			union {	unsigned int oval; result_t ival; } converter;
-			converter.ival = valOutput;
-			bValue.data = converter.oval;
-			bValue.keep = 15;
-			bValue.strb = -1;
-			bValue.user = 0;
-			bValue.last = 0;
-			bValue.id = 0;
-			bValue.dest = 0;
-			//cout << "res " << valOutput << endl; // OK
-			out_stream.write(bValue);
-			sentPixels++;
-		}
-	}
+			// Put data on the window and multiply with the kernel
+			for (int idxWinRow = 0; idxWinRow < KERNEL_DIM; idxWinRow++)
+			{
+				for (int idxWinCol = 0; idxWinCol < KERNEL_DIM; idxWinCol++)
+				{
+					// idxWinCol + pixConvolved_Power, will slide the window
+					float val = (float)lineBuff_power.getval(idxWinRow,idxWinCol+pixConvolved_Power);
+					// Multiply kernel by the sampling window
+					val = (float)kernel[(idxWinRow*KERNEL_DIM) + idxWinCol ] * val;
+					windowPower.insert(val,idxWinRow,idxWinCol);
+				}
+			}
 
-} // end of for i and j
+			// Avoid calculate out of the image boundaries
+			float valOutput = 1;
+			if ((idxRow >= KERNEL_DIM-1) && (idxCol >= KERNEL_DIM-1))
+			{
+				valOutput = func1Window(&windowTemp, &windowPower);
+				pixConvolved++;
+				pixConvolved_Power++;
+			}
 
-	// Now send the remaining zeros (Just the (Number of delayed ticks)
-	for (countWait = 0; countWait < waitTicks; countWait++)
-	{
-		bValue.data = 0;
-		//cout << "res " << 0 << endl; // OK
-		bValue.keep = 15;
-		bValue.strb = -1;
-		bValue.user = 0;
-		// Send last on the last item
-		if (countWait < waitTicks - 1)
-			bValue.last = 0;
-		else
-			bValue.last = 1;
-		bValue.id = 0;
-		bValue.dest = 0;
-		out_stream.write(bValue);
-	}
+			countWait++;
+
+			if (countWait > waitTicks)
+			{
+				if ((idxRow >= KERNEL_DIM-1) && (idxCol >= KERNEL_DIM-1))
+				{
+				//bValue.data = valOutput;
+				union {	unsigned int oval; result_t ival; } converter;
+				converter.ival = valOutput;
+				aValue_out.data = converter.oval;
+				aValue_out.keep = 15;
+				aValue_out.strb = -1;
+				aValue_out.user = 0;
+				aValue_out.last = ((i==MAT_DIM+1)&&(j==MAT_DIM+1))? 1 : 0;
+				aValue_out.id = 0;
+				aValue_out.dest = 0;
+				out_stream.write(aValue_out);
+				sentPixels++;
+				}
+			}
+
+			// Calculate row and col index
+			if (idxCol < (MAT_DIM+2)-1)
+			{
+				idxCol++;
+			}
+			else
+			{
+				// New line
+				idxCol = 0;
+				idxRow++;
+				pixConvolved = 0;
+				pixConvolved_Power = 0;
+			}
+		} // end of for j
+	} // end of for i
 } // end of function
 
-// Sum all values inside window (Already multiplied by the kernel)
-float sumWindow(hls::Window<KERNEL_DIM,KERNEL_DIM,float> *window)
+// Process the value inside window (Already multiplied by the kernel)
+float func1Window(	hls::Window<KERNEL_DIM,KERNEL_DIM,float> *temp,
+					hls::Window<KERNEL_DIM,KERNEL_DIM,float> *power)
 {
-	float accumulator = 0;
+	float result = 0;
 
-	// Iterate on the window multiplying and accumulating the kernel and sampling window
-	for (int idxRow = 0; idxRow < KERNEL_DIM; idxRow++)
-	{
-		for (int idxCol = 0; idxCol < KERNEL_DIM; idxCol++)
-		{
-			accumulator = accumulator + (float)window->getval(idxRow,idxCol);
-		}
-	}
-	return accumulator;
+	result = ((float)temp->getval(1,1)) +
+		(Cap_1 * ( ((float)power->getval(1,1)) +
+		(((float)temp->getval(2,1) + (float)temp->getval(0,1) - (2.0 * (float)temp->getval(1,1))) * Ry_1) +
+		(((float)temp->getval(1,2) + (float)temp->getval(1,0) - (2.0 * (float)temp->getval(1,1))) * Rx_1) +
+		((amb_temp_cpu - (float)temp->getval(1,1)) * Rz_1)));
+
+	return result;
 }
 
-// --------------------------------------------------------
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // main accelerator function, interfaces with AXI-S channels
 void func_hls_core (
 	stream<AXI_VALUE> &in_stream_0,
@@ -163,12 +177,12 @@ void func_hls_core (
 {
 
 	// Map HLS ports to AXI interfaces
-#pragma HLS RESOURCE variable=in_stream_0  core=AXIS metadata="-bus_bundle INPUT_STREAM_0"
-#pragma HLS RESOURCE variable=in_stream_1  core=AXIS metadata="-bus_bundle INPUT_STREAM_1"
+#pragma HLS RESOURCE variable=in_stream_0 core=AXIS metadata="-bus_bundle INPUT_STREAM_0"
+#pragma HLS RESOURCE variable=in_stream_1 core=AXIS metadata="-bus_bundle INPUT_STREAM_1"
 #pragma HLS RESOURCE variable=out_stream core=AXIS metadata="-bus_bundle OUTPUT_STREAM"
 #pragma HLS RESOURCE variable=return core=AXI4LiteS metadata="-bus_bundle CONTROL_BUS"
 
-	// do Matrix multiplication
+	// Perform the accelerator
 	matrixmul(in_stream_0, in_stream_1, out_stream);
 
 }
