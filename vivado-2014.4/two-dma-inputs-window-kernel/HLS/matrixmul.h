@@ -8,17 +8,13 @@
 
 using namespace std;
 
-#define MAT_DIM 32
-
-
+#define MAT_DIM 1024
 
 typedef float mat_a_t;
 typedef float mat_b_t;
 typedef float result_t;
 
 typedef ap_axiu<32,4,5,5> AXI_VALUE;
-
-
 
 // Prototype of top level function for C-synthesis
 void matrixmul(
