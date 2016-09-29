@@ -1,7 +1,6 @@
 #include <iostream>
 #include "matrixmul.h"
 
-void gen_matrix_ab(mat_a_t a[MAT_DIM][MAT_DIM],mat_b_t b[MAT_DIM][MAT_DIM]);
 void check_matmult_result( result_t hw_res[MAT_DIM][MAT_DIM], result_t sw_res[MAT_DIM][MAT_DIM], int &err_cnt);
 
 using namespace std;
@@ -17,59 +16,53 @@ int test_matrix_mul_core()
    hls::stream<AXI_VALUE> in_stream_0;
    hls::stream<AXI_VALUE> in_stream_1;
    hls::stream<AXI_VALUE> out_stream;
-   AXI_VALUE aValue;
+   AXI_VALUE aValue, bValue, cValue;
 
    float tmp;
    FILE *fpIn0, *fpIn1, *fpOut;
 
-   gen_matrix_ab(in_mat_a, in_mat_b);
-
 	// Load input data from files
-   fpIn0=fopen("in0.txt","r");
-	for (i=0; i<16; i++){
+   fpIn0=fopen("temp_32.txt","r");
+	for (i=0; i<(MAT_DIM*MAT_DIM); i++){
 		fscanf(fpIn0, "%6f", &tmp);
-		union {	unsigned int oval; mat_a_t ival; } converter;
-		converter.ival = tmp;
-		aValue.data = converter.oval;
+		union {	unsigned int oval; mat_a_t ival; } converterA;
+		converterA.ival = tmp;
+		aValue.data = converterA.oval;
 		in_stream_0.write(aValue);
 	}
 	fclose(fpIn0);
 
-	/*
-   //convert matrix in input stream
-	for(i = 0; i < MAT_DIM; i++) {
-		for(j = 0; j < MAT_DIM; j++) {
-			union {	unsigned int oval; mat_a_t ival; } converter;
-			converter.ival = in_mat_a[i][j];
-			aValue.data = converter.oval;
-		  in_stream_0.write(aValue);
-		}
+	// Load input data from files
+   fpIn1=fopen("power_32.txt","r");
+	for (i=0; i<(MAT_DIM*MAT_DIM); i++){
+		fscanf(fpIn1, "%6f", &tmp);
+		union {	unsigned int oval; mat_a_t ival; } converterB;
+		converterB.ival = tmp;
+		bValue.data = converterB.oval;
+		in_stream_1.write(bValue);
 	}
-	*/
-
-	for(i = 0; i < MAT_DIM; i++) {
-		for(j = 0; j < MAT_DIM; j++) {
-			union {	unsigned int oval; mat_b_t ival; } converter;
-			converter.ival = in_mat_b[i][j];
-			aValue.data = converter.oval;
-		  in_stream_1.write(aValue);
-		}
-	}
+	fclose(fpIn1);
 
    // Run the Vivado-HLS matrix multiply block
 	func_hls_core(in_stream_0, in_stream_1, out_stream);
 
 	// Save the results to a file
 	fpOut=fopen("result.txt","w");
-
-   //convert  output stream in matrix
 	for(i = 0; i < MAT_DIM; i++) {
 		for(j = 0; j < MAT_DIM; j++) {
-			out_stream.read(aValue);
+			out_stream.read(cValue); //convert  output stream in matrix
 			union {	unsigned int ival; result_t oval; } converter;
-			converter.ival = aValue.data;
+			converter.ival = cValue.data;
 			hw_result[i][j] = converter.oval;
-			fprintf(fpOut, "%f\n", hw_result[i][j]);
+			if (hw_result[i][j] > 999.99) {
+				fprintf(fpOut, "%.3f\n", hw_result[i][j]);
+			}
+			else if (hw_result[i][j] > 99.99) {
+				fprintf(fpOut, "%.4f\n", hw_result[i][j]);
+			}
+			else {
+				fprintf(fpOut, "%.5f\n", hw_result[i][j]);
+			}
 		}
 	}
 	fclose(fpOut);
@@ -80,21 +73,6 @@ int test_matrix_mul_core()
 
    // assume no error
    return 0;
-}
-
-//----------------------------------------------------
-void gen_matrix_ab(
-    mat_a_t a[MAT_DIM][MAT_DIM],
-    mat_b_t b[MAT_DIM][MAT_DIM])
-{
-	int k=1;
-	for(int i = 0; i < MAT_DIM; i++) {
-		  for(int j = 0; j < MAT_DIM; j++) {
-		  a[i][j] = k+0.1f;
-		  b[i][j] = 0;
-		  k++;
-	   }
-	}
 }
 
 //----------------------------------------------------
